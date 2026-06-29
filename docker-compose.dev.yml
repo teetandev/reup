@@ -1,0 +1,38 @@
+# Local development PostgreSQL ONLY (Phase 15 — local E2E).
+#
+# This compose file exists so a developer can run the Control API against a real
+# PostgreSQL without installing it on the host. It deliberately starts NOTHING
+# else: the Control API, the VPS agent, and the web UI are run directly from the
+# repo (see docs/runbooks/E2E_LOCAL_TEST.md) so they are reloadable and easy to
+# debug. Video processing must NEVER run in a web container (CLAUDE.md rule 4).
+#
+# Usage:
+#   docker compose -f docker-compose.dev.yml up -d        # start Postgres
+#   docker compose -f docker-compose.dev.yml down         # stop, keep data
+#   docker compose -f docker-compose.dev.yml down -v      # stop, wipe data
+#
+# Matches the default DATABASE_URL in apps/control-api/.env.example:
+#   postgresql://postgres:postgres@localhost:5432/reup_vietsub
+#
+# These are LOCAL-ONLY throwaway credentials. Never reuse them in production.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: reup-postgres-dev
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: reup_vietsub
+    ports:
+      - "5432:5432"
+    volumes:
+      - reup_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d reup_vietsub"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  reup_pg_data:

@@ -1,0 +1,21 @@
+# Control API (FastAPI) — runtime dependencies through Phase 04.
+# Coordinates auth, users, keys, jobs, nodes, scheduler, heartbeat, upload tokens.
+# Never receives 500MB video uploads.
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+python-dotenv
+
+# Phase 03 — database models + migrations
+SQLAlchemy
+psycopg2-binary
+alembic
+
+# Phase 04 — secret-key auth
+PyJWT
+passlib[argon2]
+
+# Phase 06 — node registry + heartbeat reuses passlib[argon2] (node tokens).
+# The control API is the heartbeat *server*; the outbound httpx client lives in
+# services/vps-agent, so no new control-api dependency is needed this phase.

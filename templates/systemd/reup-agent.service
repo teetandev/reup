@@ -1,0 +1,17 @@
+[Unit]
+Description=Reup Vietsub VPS Agent
+After=network.target
+
+[Service]
+Type=simple
+User=reup-agent
+Group=reup-agent
+WorkingDirectory=/opt/reup-agent
+EnvironmentFile=/etc/reup-agent/.env
+ExecStart=/opt/reup-agent/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port ${AGENT_PORT}
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

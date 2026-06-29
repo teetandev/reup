@@ -1,0 +1,17 @@
+# VPS Agent (FastAPI). Runs on each Ubuntu VPS (2vCPU/2GB). Receives direct
+# uploads, runs the video pipeline, reports heartbeat/progress. MAX_JOBS=1.
+# Phase 05 uses: fastapi, uvicorn, pydantic[-settings], psutil, httpx (TestClient).
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+python-dotenv
+python-multipart  # used from Phase 08 (direct upload)
+httpx              # used from Phase 06 (heartbeat) + TestClient
+psutil
+# Phase 10: the agent imports packages/video-pipeline (video_pipeline) and runs it
+# in a background thread. In the dev monorepo it is auto-added to sys.path
+# (see app/pipeline_runner.py; override with VIDEO_PIPELINE_PATH). For deployment,
+# install it on the PYTHONPATH. Its third-party runtime deps must be present here:
+openai             # Groq Whisper transcription (OpenAI-compatible client)
+google-genai       # Gemini translation
