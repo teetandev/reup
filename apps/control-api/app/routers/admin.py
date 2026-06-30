@@ -326,17 +326,17 @@ def get_stats(db: Session = Depends(get_db), settings: Settings = Depends(settin
     idle_nodes = db.scalar(
         select(text("count(*)"))
         .select_from(VpsNode)
-        .where(VpsNode.enabled == True, VpsNode.status == NodeStatus.IDLE, VpsNode.last_heartbeat_at > stale_threshold)
+        .where(VpsNode.deleted_at.is_(None), VpsNode.enabled == True, VpsNode.status == NodeStatus.IDLE, VpsNode.last_heartbeat_at > stale_threshold)
     ) or 0
     busy_nodes = db.scalar(
         select(text("count(*)"))
         .select_from(VpsNode)
-        .where(VpsNode.enabled == True, VpsNode.status == NodeStatus.BUSY, VpsNode.last_heartbeat_at > stale_threshold)
+        .where(VpsNode.deleted_at.is_(None), VpsNode.enabled == True, VpsNode.status == NodeStatus.BUSY, VpsNode.last_heartbeat_at > stale_threshold)
     ) or 0
     offline_nodes = db.scalar(
         select(text("count(*)"))
         .select_from(VpsNode)
-        .where(VpsNode.status == NodeStatus.OFFLINE)
+        .where(VpsNode.deleted_at.is_(None), VpsNode.status == NodeStatus.OFFLINE)
     ) or 0
     failed_jobs_today = db.scalar(
         select(text("count(*)"))

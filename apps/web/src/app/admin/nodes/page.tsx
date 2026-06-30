@@ -99,7 +99,14 @@ export default function AdminNodesPage() {
       setConfirm(null);
       loadNodes();
     } catch (err: any) {
-      toast(err?.message || 'Hành động thất bại', 'error');
+      // If a delete failed because the node is BUSY, keep the modal open and
+      // flip it into "force" mode so the admin can confirm the forced delete.
+      if (confirm.kind === 'delete' && err?.code === 'NODE_BUSY') {
+        setConfirm({ ...confirm, force: true });
+        toast('Node đang BUSY — tích "Force delete" để xóa.', 'error');
+      } else {
+        toast(err?.message || 'Hành động thất bại', 'error');
+      }
     } finally {
       setActionLoading(false);
     }

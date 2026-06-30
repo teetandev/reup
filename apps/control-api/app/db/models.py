@@ -45,7 +45,12 @@ node_status_enum = _enum(NodeStatus, "node_status")
 job_status_enum = _enum(JobStatus, "job_status")
 
 _PK = lambda: mapped_column(  # noqa: E731
-    UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    UUID(as_uuid=True),
+    primary_key=True,
+    # Python-side default keeps ORM inserts portable (e.g. SQLite tests) while
+    # the server_default lets the DB generate ids for raw SQL inserts.
+    default=uuid.uuid4,
+    server_default=text("gen_random_uuid()"),
 )
 _NOW = lambda nullable=False: mapped_column(  # noqa: E731
     TIMESTAMP(timezone=True), nullable=nullable, server_default=text("now()")
@@ -113,6 +118,7 @@ class VpsNode(Base):
         Index("idx_vps_nodes_status", "status"),
         Index("idx_vps_nodes_enabled", "enabled"),
         Index("idx_vps_nodes_last_heartbeat", "last_heartbeat_at"),
+        Index("idx_vps_nodes_deleted_at", "deleted_at"),
     )
 
     id: Mapped[uuid.UUID] = _PK()
@@ -142,6 +148,13 @@ class VpsNode(Base):
         TIMESTAMP(timezone=True), nullable=True
     )
 
+    # Soft-delete marker. A non-NULL value means the node is logically deleted:
+    # it is hidden from the admin list and is never assignable by the scheduler,
+    # while its job history (jobs / job_events) is preserved intact.
+    deleted_at: Mapped[datetime.datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
     created_at: Mapped[datetime.datetime] = _NOW()
     updated_at: Mapped[datetime.datetime] = _NOW()
 
@@ -164,7 +177,9 @@ class Job(Base):
         UUID(as_uuid=True), ForeignKey("api_keys.id"), nullable=True
     )
     node_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("vps_nodes.id"), nullable=True
+        UUID(as_uuid=True),
+        ForeignKey("vps_nodes.id", ondelete="SET NULL"),
+        nullable=True,
     )
 
     status: Mapped[JobStatus] = mapped_column(
@@ -230,7 +245,9 @@ class JobEvent(Base):
         UUID(as_uuid=True), ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False
     )
     node_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("vps_nodes.id"), nullable=True
+        UUID(as_uuid=True),
+        ForeignKey("vps_nodes.id", ondelete="SET NULL"),
+        nullable=True,
     )
 
     event_type: Mapped[str] = mapped_column(Text, nullable=False)

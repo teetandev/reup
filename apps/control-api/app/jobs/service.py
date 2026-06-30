@@ -35,7 +35,7 @@ def diagnose_no_node_available(db: Session, settings: Settings) -> list[dict]:
     from ..nodes.service import assignability_report
 
     try:
-        nodes = list(db.scalars(select(VpsNode)))
+        nodes = list(db.scalars(select(VpsNode).where(VpsNode.deleted_at.is_(None))))
     except Exception:  # noqa: BLE001
         return []
     return [
@@ -82,6 +82,7 @@ def assign_idle_node(db: Session, settings: Settings) -> VpsNode | None:
     node = db.scalar(
         select(VpsNode)
         .where(
+            VpsNode.deleted_at.is_(None),
             VpsNode.enabled == True,
             VpsNode.status == NodeStatus.IDLE,
             VpsNode.current_job_id == None,

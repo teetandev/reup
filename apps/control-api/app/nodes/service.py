@@ -63,7 +63,11 @@ def register_node(db: Session, settings: Settings, name: str, public_url: str) -
     Only ``node_token_prefix`` + ``node_token_hash`` are stored. The plaintext
     token is returned to the caller for one-time display and then discarded.
     """
-    existing = db.scalar(select(VpsNode).where(VpsNode.public_url == public_url))
+    existing = db.scalar(
+        select(VpsNode).where(
+            VpsNode.public_url == public_url, VpsNode.deleted_at.is_(None)
+        )
+    )
     if existing is not None:
         raise ApiError(
             409,
@@ -117,18 +121,32 @@ def reconcile_stale(db: Session, node: VpsNode, stale_seconds: int) -> VpsNode:
 
 
 def list_nodes(db: Session, stale_seconds: int) -> list[VpsNode]:
-    """Return all nodes, reconciling stale ones to OFFLINE first."""
-    nodes = list(db.scalars(select(VpsNode).order_by(VpsNode.created_at.desc())))
+    """Return all *non-deleted* nodes, reconciling stale ones to OFFLINE first.
+
+    Soft-deleted nodes (``deleted_at IS NOT NULL``) are hidden from the admin
+    list — their job history is kept but they are gone from the operator view.
+    """
+    nodes = list(
+        db.scalars(
+            select(VpsNode)
+            .where(VpsNode.deleted_at.is_(None))
+            .order_by(VpsNode.created_at.desc())
+        )
+    )
     for node in nodes:
         reconcile_stale(db, node, stale_seconds)
     return nodes
 
 
 def get_node(db: Session, node_id: str, stale_seconds: int) -> VpsNode:
-    """Fetch a node by id, reconciling staleness. Raises NODE_NOT_FOUND."""
+    """Fetch a non-deleted node by id, reconciling staleness.
+
+    Raises NODE_NOT_FOUND for an unknown id *or* a soft-deleted node, so a
+    deleted node behaves as if it no longer exists for all admin operations.
+    """
     nid = _parse_node_id(node_id)
     node = db.get(VpsNode, nid)
-    if node is None:
+    if node is None or node.deleted_at is not None:
         raise ApiError(404, "NODE_NOT_FOUND", "Node not found.")
     return reconcile_stale(db, node, stale_seconds)
 
@@ -146,7 +164,12 @@ def authenticate_node(db: Session, node_id: str, token: str) -> VpsNode:
         raise ApiError(401, "NODE_AUTH_FAILED", "Node authentication failed.")
 
     node = db.get(VpsNode, nid)
-    if node is None or not verify_node_token(token, node.node_token_hash):
+    # A soft-deleted node must not be able to authenticate / heartbeat again.
+    if (
+        node is None
+        or node.deleted_at is not None
+        or not verify_node_token(token, node.node_token_hash)
+    ):
         raise ApiError(401, "NODE_AUTH_FAILED", "Node authentication failed.")
     return node
 
@@ -237,29 +260,53 @@ def rotate_node_token(db: Session, node: VpsNode) -> tuple[VpsNode, str]:
 
 
 def delete_node(db: Session, node: VpsNode, force: bool = False) -> None:
-    """Delete a node. Refuses to delete a BUSY node unless ``force=True``.
+    """Soft-delete a node. Refuses a BUSY node unless ``force=True``.
 
-    To preserve job data we detach any jobs still pointing at this node by
-    nulling their ``node_id`` (jobs.node_id is nullable; ON DELETE would
-    otherwise violate the FK). Job rows and their events are kept intact.
+    This is a **logical** delete: the row is kept so that all existing jobs and
+    job_events keep referencing it (job history is preserved — exactly what the
+    admin modal promises), but the node becomes invisible and unusable:
+
+    - ``deleted_at`` is stamped (hides it from the admin list and ``get_node``).
+    - ``status`` -> DISABLED and ``enabled`` -> False (scheduler never picks it).
+    - ``current_job_id`` is cleared so it never holds a phantom job.
+    - the node token is wiped (prefix + hash) so the old agent can no longer
+      authenticate or heartbeat back to life.
+    - ``public_url`` is suffixed with ``#deleted-<id>`` so the (unique) URL is
+      freed for a brand-new node to reuse — this is what stops jobs from being
+      routed to the dead Codespace URL.
+
+    No hard ``DELETE`` is issued, so there is no FK violation and no 500. The
+    ON DELETE SET NULL rules added in migration 0002 remain as a safety net if a
+    hard delete is ever performed manually.
     """
+    if node.deleted_at is not None:
+        # Idempotent: deleting an already-deleted node is a no-op success.
+        return
+
     if node.status == NodeStatus.BUSY and not force:
         raise ApiError(
             409,
             "NODE_BUSY",
             "Node is BUSY. Use force=true to delete it anyway.",
-            {"node_id": str(node.id), "current_job_id": str(node.current_job_id) if node.current_job_id else None},
+            {
+                "node_id": str(node.id),
+                "current_job_id": str(node.current_job_id) if node.current_job_id else None,
+            },
         )
 
-    # Detach jobs to avoid FK violations; do not delete user job history.
-    from ..db.models import Job
+    now = _now()
+    node.deleted_at = now
+    node.status = NodeStatus.DISABLED
+    node.enabled = False
+    node.current_job_id = None
+    # Invalidate the token so the dead agent cannot reconnect.
+    node.node_token_prefix = None
+    node.node_token_hash = None
+    # Free the unique public_url so a replacement node can register the same URL.
+    if node.public_url and "#deleted-" not in node.public_url:
+        node.public_url = f"{node.public_url}#deleted-{node.id}"
+    node.updated_at = now
 
-    jobs = list(db.scalars(select(Job).where(Job.node_id == node.id)))
-    for job in jobs:
-        job.node_id = None
-        job.updated_at = _now()
-
-    db.delete(node)
     db.commit()
 
 
