@@ -108,9 +108,9 @@ async def heartbeat_loop(state: NodeState, settings: Settings) -> None:
         settings.node_id or "<unset>",
     )
 
-    # Cleanup runs every ~1 hour (assuming 30s heartbeat interval = 120 iterations)
+    # TTL cleanup runs every ~10 minutes (with a 30s heartbeat = 20 iterations).
     cleanup_counter = 0
-    cleanup_interval = 120
+    cleanup_interval = max(1, (10 * 60) // interval)
 
     async with httpx.AsyncClient(timeout=10.0) as client:
         while True:
@@ -122,14 +122,16 @@ async def heartbeat_loop(state: NodeState, settings: Settings) -> None:
             except Exception as exc:  # noqa: BLE001 - keep the loop alive
                 logger.warning("Heartbeat send failed: %s", exc)
 
-            # Periodic cleanup of old job files
+            # Periodic TTL cleanup of finished job outputs (never the running job).
             cleanup_counter += 1
             if cleanup_counter >= cleanup_interval:
                 try:
                     from .cleanup import cleanup_old_jobs
-                    cleanup_old_jobs(settings, retention_days=7)
+
+                    current_job_id = state.snapshot().current_job_id
+                    cleanup_old_jobs(settings, current_job_id=current_job_id)
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning("Job cleanup failed: %s", exc)
+                    logger.warning("TTL job cleanup failed: %s", exc)
                 cleanup_counter = 0
 
             await asyncio.sleep(interval)

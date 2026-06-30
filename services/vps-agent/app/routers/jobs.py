@@ -19,9 +19,10 @@ import secrets
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Form, Header
+from fastapi import APIRouter, BackgroundTasks, Depends, Form, Header
 from fastapi.responses import FileResponse, JSONResponse
 
+from ..cleanup import cleanup_after_download
 from ..config import Settings, get_settings
 from ..errors import AgentError
 from ..job_runtime import get_job_registry
@@ -178,11 +179,19 @@ async def job_status(
 @router.get("/{job_id}/download")
 async def download_output(
     job_id: str,
+    background_tasks: BackgroundTasks,
+    cleanup: bool = True,
     settings: Settings = Depends(get_settings),
 ) -> FileResponse:
     """Serve the rendered MP4 — only when the job is DONE.
 
     Authorization is the unguessable job UUID (capability URL). See Security notes.
+
+    After the file has been fully streamed to the client, a background task
+    deletes the entire job folder to keep disk usage bounded. Pass
+    ``?cleanup=false`` to disable the post-download cleanup (e.g. for retries
+    while debugging). The cleanup runs only *after* FileResponse finishes
+    reading the file, so the download is never truncated.
     """
     _validate_job_id(job_id)
 
@@ -201,10 +210,15 @@ async def download_output(
     if not output_path.exists():
         raise AgentError(404, "JOB_NOT_FOUND", "Output not available for this job.", {"job_id": job_id})
 
+    if cleanup:
+        # Scheduled to run after the response body has been sent.
+        background_tasks.add_task(cleanup_after_download, settings, job_id)
+
     return FileResponse(
         path=str(output_path),
         media_type="video/mp4",
         filename=f"{job_id}.mp4",
+        background=background_tasks,
     )
 
 

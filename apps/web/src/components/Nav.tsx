@@ -28,8 +28,8 @@ export default function Nav() {
         <div className="nav-links">
           <Link href="/dashboard" className="nav-link">Trang chủ</Link>
           <Link href="/jobs" className="nav-link">Lịch sử</Link>
-          {user && <span style={{ color: '#666' }}>{user.display_name}</span>}
-          <button onClick={handleLogout} className="btn btn-secondary" style={{ padding: '6px 12px' }}>
+          {user && <span className="text-soft text-sm">{user.display_name}</span>}
+          <button onClick={handleLogout} className="btn btn-secondary btn-sm">
             Đăng xuất
           </button>
         </div>

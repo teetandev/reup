@@ -9,7 +9,7 @@ from __future__ import annotations
 import datetime as dt
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
@@ -17,7 +17,7 @@ from ..auth.dependencies import require_admin, settings_dep
 from ..auth.keys import generate_secret_key, hash_key, key_prefix
 from ..config import Settings
 from ..db.enums import ApiKeyStatus, UserRole
-from ..db.models import ApiKey, Job, User, VpsNode
+from ..db.models import AdminAuditLog, ApiKey, Job, User, VpsNode
 from ..db.session import get_db
 from ..errors import ApiError
 from ..nodes import service as node_service
@@ -28,7 +28,14 @@ from ..schemas.admin import (
     RevokeKeyResponse,
     UserResponse,
 )
-from ..schemas.nodes import NodeResponse, RegisterNodeRequest, RegisterNodeResponse
+from ..schemas.nodes import (
+    NodeActionResponse,
+    NodeDebugResponse,
+    NodeResponse,
+    RegisterNodeRequest,
+    RegisterNodeResponse,
+    RotateNodeTokenResponse,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
 
@@ -38,6 +45,40 @@ def _parse_uuid(value: str, not_found_message: str) -> uuid.UUID:
         return uuid.UUID(value)
     except (ValueError, TypeError) as exc:
         raise ApiError(404, "NOT_FOUND", not_found_message) from exc
+
+
+def _audit(
+    db: Session,
+    request: Request,
+    action: str,
+    target_type: str,
+    target_id: uuid.UUID | None,
+    metadata: dict | None = None,
+) -> None:
+    """Best-effort admin audit log entry. Never logs secrets; never raises."""
+    try:
+        admin_user_id = None
+        admin = getattr(request.state, "admin", None)
+        if isinstance(admin, dict) and admin.get("type") == "jwt":
+            try:
+                admin_user_id = uuid.UUID(str(admin.get("sub")))
+            except (ValueError, TypeError):
+                admin_user_id = None
+        entry = AdminAuditLog(
+            admin_user_id=admin_user_id,
+            action=action,
+            target_type=target_type,
+            target_id=target_id,
+            audit_metadata=metadata or {},
+        )
+        db.add(entry)
+        db.commit()
+    except Exception:  # noqa: BLE001 - audit must never break the action
+        db.rollback()
+
+
+def _get_node_or_404(db: Session, node_id: str, settings: Settings) -> VpsNode:
+    return node_service.get_node(db, node_id, settings.node_heartbeat_stale_seconds)
 
 
 def _node_response(node: VpsNode) -> NodeResponse:
@@ -172,6 +213,88 @@ def get_node(
     """View a single node's detail. Reconciles staleness to OFFLINE."""
     node = node_service.get_node(db, node_id, settings.node_heartbeat_stale_seconds)
     return _node_response(node)
+
+
+@router.get("/nodes/{node_id}/debug", response_model=NodeDebugResponse)
+def node_debug(
+    node_id: str,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(settings_dep),
+) -> NodeDebugResponse:
+    """Explain whether a node is assignable and why not (no secrets)."""
+    node = _get_node_or_404(db, node_id, settings)
+    report = node_service.assignability_report(node, settings.node_heartbeat_stale_seconds)
+    return NodeDebugResponse(**report)
+
+
+@router.post("/nodes/{node_id}/disable", response_model=NodeActionResponse)
+def disable_node(
+    node_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(settings_dep),
+) -> NodeActionResponse:
+    """Disable a node so the scheduler never assigns it new jobs."""
+    node = _get_node_or_404(db, node_id, settings)
+    node = node_service.set_node_enabled(db, node, enabled=False, stale_seconds=settings.node_heartbeat_stale_seconds)
+    _audit(db, request, "NODE_DISABLE", "vps_node", node.id)
+    return NodeActionResponse(
+        id=str(node.id), status=node.status.value, enabled=node.enabled, message="Node disabled."
+    )
+
+
+@router.post("/nodes/{node_id}/enable", response_model=NodeActionResponse)
+def enable_node(
+    node_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(settings_dep),
+) -> NodeActionResponse:
+    """Re-enable a node (status derived from its latest heartbeat)."""
+    node = _get_node_or_404(db, node_id, settings)
+    node = node_service.set_node_enabled(db, node, enabled=True, stale_seconds=settings.node_heartbeat_stale_seconds)
+    _audit(db, request, "NODE_ENABLE", "vps_node", node.id)
+    return NodeActionResponse(
+        id=str(node.id), status=node.status.value, enabled=node.enabled, message="Node enabled."
+    )
+
+
+@router.post("/nodes/{node_id}/rotate-token", response_model=RotateNodeTokenResponse)
+def rotate_node_token(
+    node_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(settings_dep),
+) -> RotateNodeTokenResponse:
+    """Rotate a node's token. The new plaintext token is returned ONCE."""
+    node = _get_node_or_404(db, node_id, settings)
+    node, token = node_service.rotate_node_token(db, node)
+    # Audit the action but NEVER the token (only the non-secret prefix).
+    _audit(db, request, "NODE_ROTATE_TOKEN", "vps_node", node.id, {"prefix": node.node_token_prefix})
+    return RotateNodeTokenResponse(
+        id=str(node.id),
+        name=node.name,
+        node_token=token,
+        node_token_prefix=node.node_token_prefix or "",
+    )
+
+
+@router.delete("/nodes/{node_id}", response_model=NodeActionResponse)
+def delete_node(
+    node_id: str,
+    request: Request,
+    force: bool = False,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(settings_dep),
+) -> NodeActionResponse:
+    """Delete a node. BUSY nodes require ``?force=true``. Jobs are preserved."""
+    node = _get_node_or_404(db, node_id, settings)
+    node_uuid = node.id
+    node_service.delete_node(db, node, force=force)
+    _audit(db, request, "NODE_DELETE", "vps_node", node_uuid, {"force": force})
+    return NodeActionResponse(
+        id=str(node_uuid), status="DELETED", enabled=False, message="Node deleted."
+    )
 
 
 @router.get("/users", response_model=list[UserResponse])

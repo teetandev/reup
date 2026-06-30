@@ -58,6 +58,43 @@ class NodeResponse(BaseModel):
     updated_at: dt.datetime
 
 
+class RotateNodeTokenResponse(BaseModel):
+    """Returned once when an admin rotates a node's token.
+
+    ``node_token`` is the new plaintext token, shown **once**. The previous token
+    is invalidated immediately.
+    """
+
+    id: str
+    name: str
+    node_token: str
+    node_token_prefix: str
+
+
+class NodeActionResponse(BaseModel):
+    """Generic ack for enable/disable/delete node admin actions."""
+
+    id: str
+    status: str
+    enabled: bool
+    message: str
+
+
+class NodeDebugResponse(BaseModel):
+    """Non-secret assignability diagnostics for a single node."""
+
+    node_id: str
+    name: str
+    enabled: bool
+    status: str
+    current_job_id: str | None
+    last_heartbeat_at: str | None
+    heartbeat_age_seconds: int | None
+    stale_threshold_seconds: int
+    assignable: bool
+    reasons: list[str]
+
+
 class HeartbeatRequest(BaseModel):
     """Heartbeat payload sent by a VPS agent (node-authenticated)."""
 

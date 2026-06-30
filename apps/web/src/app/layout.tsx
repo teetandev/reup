@@ -1,4 +1,5 @@
 import './globals.css';
+import { ToastProvider } from '@/components/ui';
 
 export const metadata = {
   title: 'Reup Vietsub',
@@ -8,7 +9,9 @@ export const metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="vi">
-      <body>{children}</body>
+      <body>
+        <ToastProvider>{children}</ToastProvider>
+      </body>
     </html>
   );
 }

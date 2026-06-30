@@ -85,7 +85,7 @@ def run_pipeline(
 
     report_progress(progress_callback, 10, "Chunking audio")
     chunks_dir = audio_dir / "chunks"
-    chunks = chunk_audio(audio_path, chunks_dir, metadata["duration"])
+    chunks = chunk_audio(audio_path, chunks_dir, metadata["duration"], work_dir=work_dir)
     artifacts["chunks"] = chunks
 
     report_progress(progress_callback, 15, "Transcribing audio")

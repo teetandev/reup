@@ -25,4 +25,12 @@ tmp/
 transcript.json
 translated.json
 checkpoint.json
-reup.rar
+reup.rar# Worker runtime/state
+services/vps-agent/.env
+services/vps-agent/.venv/
+services/vps-agent/agent_work/
+.pm2/
+*.bak
+*.backup
+*.tar.gz
+*.patch

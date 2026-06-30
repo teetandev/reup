@@ -129,6 +129,43 @@ export interface DashboardStats {
   failed_jobs_today: number;
 }
 
+export interface RegisterNodeResponse {
+  id: string;
+  name: string;
+  public_url: string;
+  status: string;
+  node_token: string;
+  node_token_prefix: string;
+  install_command: string;
+}
+
+export interface RotateNodeTokenResponse {
+  id: string;
+  name: string;
+  node_token: string;
+  node_token_prefix: string;
+}
+
+export interface NodeActionResponse {
+  id: string;
+  status: string;
+  enabled: boolean;
+  message: string;
+}
+
+export interface NodeDebug {
+  node_id: string;
+  name: string;
+  enabled: boolean;
+  status: string;
+  current_job_id: string | null;
+  last_heartbeat_at: string | null;
+  heartbeat_age_seconds: number | null;
+  stale_threshold_seconds: number;
+  assignable: boolean;
+  reasons: string[];
+}
+
 export const api = {
   login: (secretKey: string) =>
     request<LoginResponse>('/auth/login', {
@@ -164,15 +201,21 @@ export const api = {
     listNodes: () => request<Node[]>('/admin/nodes'),
     getNode: (nodeId: string) => request<Node>(`/admin/nodes/${nodeId}`),
     registerNode: (data: { name: string; public_url: string }) =>
-      request<{ id: string; name: string; public_url: string; status: string; node_token: string; node_token_prefix: string; install_command: string }>('/admin/nodes', {
+      request<RegisterNodeResponse>('/admin/nodes', {
         method: 'POST',
         body: JSON.stringify(data),
       }),
-    toggleNodeEnabled: (nodeId: string, enabled: boolean) =>
-      request<Node>(`/admin/nodes/${nodeId}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ enabled }),
+    disableNode: (nodeId: string) =>
+      request<NodeActionResponse>(`/admin/nodes/${nodeId}/disable`, { method: 'POST' }),
+    enableNode: (nodeId: string) =>
+      request<NodeActionResponse>(`/admin/nodes/${nodeId}/enable`, { method: 'POST' }),
+    rotateNodeToken: (nodeId: string) =>
+      request<RotateNodeTokenResponse>(`/admin/nodes/${nodeId}/rotate-token`, { method: 'POST' }),
+    deleteNode: (nodeId: string, force = false) =>
+      request<NodeActionResponse>(`/admin/nodes/${nodeId}${force ? '?force=true' : ''}`, {
+        method: 'DELETE',
       }),
+    nodeDebug: (nodeId: string) => request<NodeDebug>(`/admin/nodes/${nodeId}/debug`),
     listAllJobs: () => request<JobListResponse>('/admin/jobs').then((r) => r.jobs),
     getJob: (jobId: string) => request<Job>(`/admin/jobs/${jobId}`),
   },

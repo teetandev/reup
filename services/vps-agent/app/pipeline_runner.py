@@ -284,6 +284,15 @@ def run_job_pipeline(job_id: str, settings: Settings) -> None:
         progress_percent=100.0,
         message="Job completed successfully.",
     )
+
+    # Free disk: drop all intermediates, keep only output/output.mp4 for download.
+    try:
+        from .cleanup import cleanup_intermediates_after_done
+
+        cleanup_intermediates_after_done(settings, job_id)
+    except Exception as exc:  # noqa: BLE001 - cleanup must never fail the job
+        logger.warning("Post-DONE intermediate cleanup failed for job %s: %s", job_id, exc)
+
     _release_local_slot(job_id)
 
 

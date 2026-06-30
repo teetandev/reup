@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     # Working directory for per-job files (input/audio/output). Created on startup.
     work_dir: str = "agent_work"
 
+    # How long (hours) a finished job's output is retained on disk before the TTL
+    # sweep removes the whole job folder. Keeps disk usage bounded even if the
+    # user never downloads. 0 disables TTL cleanup.
+    output_ttl_hours: int = 6
+
     # FFmpeg / FFprobe binaries (used from the pipeline phase onward).
     ffmpeg_bin: str = "ffmpeg"
     ffprobe_bin: str = "ffprobe"
@@ -73,6 +78,13 @@ class Settings(BaseSettings):
     def _positive_max_file(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("MAX_FILE_MB must be a positive integer.")
+        return value
+
+    @field_validator("output_ttl_hours")
+    @classmethod
+    def _non_negative_ttl(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("OUTPUT_TTL_HOURS must be >= 0 (0 disables TTL cleanup).")
         return value
 
     @property

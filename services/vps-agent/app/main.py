@@ -48,6 +48,14 @@ async def _lifespan(app: FastAPI):
     logger = get_logger(__name__)
     task: asyncio.Task | None = None
 
+    # Startup TTL sweep: remove stale finished outputs left over from previous runs.
+    try:
+        from .cleanup import cleanup_old_jobs
+
+        cleanup_old_jobs(settings, current_job_id=None)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Startup TTL cleanup failed: %s", exc)
+
     if heartbeat_enabled(settings):
         task = asyncio.create_task(heartbeat_loop(get_node_state(), settings))
     else:

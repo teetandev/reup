@@ -6,6 +6,7 @@ Phase 07: Assigns jobs to idle nodes using transactional locking.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import secrets
 import uuid
 
@@ -18,9 +19,28 @@ from ..db.models import Job, JobEvent, User, VpsNode
 from ..errors import ApiError
 from ..nodes.service import is_stale
 
+logger = logging.getLogger(__name__)
+
 
 def _now() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
+
+
+def diagnose_no_node_available(db: Session, settings: Settings) -> list[dict]:
+    """Return a per-node, non-secret explanation of why no node was assignable.
+
+    Logged when assignment fails so NO_NODE_AVAILABLE is debuggable without
+    exposing any token. Never raises.
+    """
+    from ..nodes.service import assignability_report
+
+    try:
+        nodes = list(db.scalars(select(VpsNode)))
+    except Exception:  # noqa: BLE001
+        return []
+    return [
+        assignability_report(n, settings.node_heartbeat_stale_seconds) for n in nodes
+    ]
 
 
 def _hash_token(token: str) -> str:
@@ -108,10 +128,15 @@ def create_job(
     # Assign node transactionally
     node = assign_idle_node(db, settings)
     if node is None:
+        # Log a non-secret diagnostic so operators can see *why* (stale / busy /
+        # disabled / no nodes at all) without querying the DB by hand.
+        diag = diagnose_no_node_available(db, settings)
+        logger.warning("NO_NODE_AVAILABLE: no assignable node. diagnostics=%s", diag)
         raise ApiError(
             409,
             "NO_NODE_AVAILABLE",
             "No idle VPS nodes are available. Please try again later.",
+            {"nodes": diag},
         )
 
     # Generate upload token
@@ -193,9 +218,18 @@ def list_user_jobs(db: Session, user_id: uuid.UUID) -> list[Job]:
 
 
 def release_node(db: Session, job: Job) -> None:
-    """Release the node assigned to a job (set IDLE, clear current_job_id).
+    """Release the node assigned to a job when the job reaches a terminal state.
 
-    Only releases if job is in a terminal state and node is not DISABLED/OFFLINE.
+    Terminal = DONE/FAILED/CANCELLED/EXPIRED.
+
+    Always clears ``current_job_id`` for the matching job so the node can never be
+    left holding a phantom job (a common cause of NO_NODE_AVAILABLE). The status
+    transition is handled carefully:
+
+    - DISABLED: keep DISABLED (admin override) but still clear current_job_id.
+    - OFFLINE: keep OFFLINE (the next heartbeat will move it to IDLE) but still
+      clear current_job_id so a returning node is immediately assignable.
+    - Otherwise: move to IDLE.
     """
     terminal_statuses = {JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELLED, JobStatus.EXPIRED}
     if job.status not in terminal_statuses:
@@ -208,11 +242,11 @@ def release_node(db: Session, job: Job) -> None:
     if node is None:
         return
 
-    # Don't touch DISABLED/OFFLINE nodes
-    if node.status in (NodeStatus.DISABLED, NodeStatus.OFFLINE):
-        return
-
-    node.status = NodeStatus.IDLE
-    node.current_job_id = None
-    node.updated_at = _now()
-    db.commit()
+    # Only clear the slot if it actually points at this job (avoid stomping a
+    # newer assignment) — but if it's None already, that's fine too.
+    if node.current_job_id == job.id or node.current_job_id is None:
+        node.current_job_id = None
+        if node.status not in (NodeStatus.DISABLED, NodeStatus.OFFLINE):
+            node.status = NodeStatus.IDLE
+        node.updated_at = _now()
+        db.commit()

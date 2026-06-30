@@ -41,12 +41,16 @@ def require_admin(
     if header_secret is not None and secrets.compare_digest(
         header_secret, settings.admin_bootstrap_secret
     ):
-        return {"type": "bootstrap"}
+        identity = {"type": "bootstrap"}
+        request.state.admin = identity
+        return identity
 
     payload = decode_token(_bearer_token(request), settings)
     if payload.get("role") != UserRole.ADMIN.value:
         raise ApiError(403, "FORBIDDEN", "Admin privileges are required.")
-    return {"type": "jwt", "sub": str(payload.get("sub"))}
+    identity = {"type": "jwt", "sub": str(payload.get("sub"))}
+    request.state.admin = identity
+    return identity
 
 
 def get_current_user(

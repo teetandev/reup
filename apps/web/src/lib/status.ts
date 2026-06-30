@@ -16,6 +16,22 @@ export const STATUS_LABELS: Record<string, string> = {
   EXPIRED: 'Đã hết hạn',
 };
 
+/** Canonical pipeline step order for the job-detail timeline. */
+export const PIPELINE_STEPS: string[] = [
+  'WAITING_UPLOAD',
+  'UPLOADING',
+  'UPLOADED',
+  'EXTRACTING_AUDIO',
+  'CHUNKING_AUDIO',
+  'TRANSCRIBING',
+  'TRANSLATING',
+  'GENERATING_SRT',
+  'RENDERING',
+  'DONE',
+];
+
+export const TERMINAL_STATUSES = ['DONE', 'FAILED', 'CANCELLED', 'EXPIRED'];
+
 export const PROGRESS_MAP: Record<string, number> = {
   CREATED: 0,
   ASSIGNED_NODE: 5,

@@ -151,6 +151,118 @@ def authenticate_node(db: Session, node_id: str, token: str) -> VpsNode:
     return node
 
 
+def heartbeat_age_seconds(node: VpsNode, now: dt.datetime | None = None) -> float | None:
+    """Seconds since the node's last heartbeat, or None if it never heartbeated."""
+    if node.last_heartbeat_at is None:
+        return None
+    now = now or _now()
+    last = node.last_heartbeat_at
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=dt.timezone.utc)
+    return (now - last).total_seconds()
+
+
+def assignability_report(node: VpsNode, stale_seconds: int) -> dict:
+    """Explain whether a node can currently be assigned a job, and why not.
+
+    Used by the admin debug endpoint and the NO_NODE_AVAILABLE runbook. Exposes
+    only non-secret operational fields.
+    """
+    reasons: list[str] = []
+
+    if not node.enabled:
+        reasons.append("disabled")
+    if node.status != NodeStatus.IDLE:
+        reasons.append(f"status_not_idle ({node.status.value})")
+    if node.current_job_id is not None:
+        reasons.append("current_job_id_not_null")
+
+    age = heartbeat_age_seconds(node)
+    if age is None:
+        reasons.append("never_heartbeated")
+    elif age > stale_seconds:
+        reasons.append(f"stale_heartbeat ({int(age)}s > {stale_seconds}s)")
+
+    return {
+        "node_id": str(node.id),
+        "name": node.name,
+        "enabled": node.enabled,
+        "status": node.status.value,
+        "current_job_id": str(node.current_job_id) if node.current_job_id else None,
+        "last_heartbeat_at": node.last_heartbeat_at.isoformat()
+        if node.last_heartbeat_at
+        else None,
+        "heartbeat_age_seconds": int(age) if age is not None else None,
+        "stale_threshold_seconds": stale_seconds,
+        "assignable": len(reasons) == 0,
+        "reasons": reasons,
+    }
+
+
+def set_node_enabled(db: Session, node: VpsNode, enabled: bool, stale_seconds: int) -> VpsNode:
+    """Enable or disable a node (admin override).
+
+    - Disable: set ``enabled=False`` and status DISABLED so the scheduler skips it.
+    - Enable: set ``enabled=True``; status becomes IDLE if a recent heartbeat
+      exists, otherwise PROVISIONING (until the next heartbeat arrives).
+    """
+    node.enabled = enabled
+    if not enabled:
+        node.status = NodeStatus.DISABLED
+    else:
+        # Re-derive a sensible status from liveness.
+        if node.last_heartbeat_at is not None and not is_stale(node, stale_seconds):
+            node.status = NodeStatus.IDLE if node.current_job_id is None else NodeStatus.BUSY
+        else:
+            node.status = NodeStatus.PROVISIONING
+    node.updated_at = _now()
+    db.commit()
+    db.refresh(node)
+    return node
+
+
+def rotate_node_token(db: Session, node: VpsNode) -> tuple[VpsNode, str]:
+    """Issue a fresh node token, invalidating the old one. Returns plaintext once.
+
+    Only the new hash + prefix are persisted; the previous hash is overwritten so
+    the old token can no longer authenticate.
+    """
+    token = generate_node_token()
+    node.node_token_prefix = node_token_prefix(token)
+    node.node_token_hash = hash_node_token(token)
+    node.updated_at = _now()
+    db.commit()
+    db.refresh(node)
+    return node, token
+
+
+def delete_node(db: Session, node: VpsNode, force: bool = False) -> None:
+    """Delete a node. Refuses to delete a BUSY node unless ``force=True``.
+
+    To preserve job data we detach any jobs still pointing at this node by
+    nulling their ``node_id`` (jobs.node_id is nullable; ON DELETE would
+    otherwise violate the FK). Job rows and their events are kept intact.
+    """
+    if node.status == NodeStatus.BUSY and not force:
+        raise ApiError(
+            409,
+            "NODE_BUSY",
+            "Node is BUSY. Use force=true to delete it anyway.",
+            {"node_id": str(node.id), "current_job_id": str(node.current_job_id) if node.current_job_id else None},
+        )
+
+    # Detach jobs to avoid FK violations; do not delete user job history.
+    from ..db.models import Job
+
+    jobs = list(db.scalars(select(Job).where(Job.node_id == node.id)))
+    for job in jobs:
+        job.node_id = None
+        job.updated_at = _now()
+
+    db.delete(node)
+    db.commit()
+
+
 def apply_heartbeat(
     db: Session,
     node: VpsNode,

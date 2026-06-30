@@ -3,8 +3,45 @@
 import { useEffect, useState } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import Nav from '@/components/Nav';
+import { StatusBadge, Skeleton, formatBytes } from '@/components/ui';
 import { api, Job } from '@/lib/api';
-import { STATUS_LABELS, PROGRESS_MAP } from '@/lib/status';
+import { STATUS_LABELS, PROGRESS_MAP, PIPELINE_STEPS, TERMINAL_STATUSES } from '@/lib/status';
+
+function Timeline({ job }: { job: Job }) {
+  const failed = job.status === 'FAILED';
+  const currentIdx = PIPELINE_STEPS.indexOf(job.status);
+  // Map current_step (which is a status) onto the steps as well.
+  const stepIdx = job.current_step ? PIPELINE_STEPS.indexOf(job.current_step) : -1;
+  const activeIdx = Math.max(currentIdx, stepIdx);
+
+  return (
+    <div className="timeline">
+      {PIPELINE_STEPS.map((step, i) => {
+        let cls = '';
+        if (job.status === 'DONE') cls = 'done';
+        else if (i < activeIdx) cls = 'done';
+        else if (i === activeIdx) cls = failed ? 'error' : 'current';
+
+        const isLast = i === PIPELINE_STEPS.length - 1;
+        const mark = cls === 'done' ? '✓' : cls === 'error' ? '!' : i + 1;
+        return (
+          <div key={step} className={`timeline-step ${cls}`}>
+            <div className="timeline-marker">
+              <div className="timeline-dot">{mark}</div>
+              {!isLast && <div className="timeline-line" />}
+            </div>
+            <div className="timeline-content">
+              <div className="step-name">{STATUS_LABELS[step] || step}</div>
+              {i === activeIdx && !failed && job.status !== 'DONE' && (
+                <div className="step-hint">Đang xử lý…</div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 export default function JobDetailPage() {
   const [job, setJob] = useState<Job | null>(null);
@@ -20,17 +57,13 @@ export default function JobDetailPage() {
       router.push('/login');
       return;
     }
-
-    const TERMINAL = ['DONE', 'FAILED', 'CANCELLED', 'EXPIRED'];
     let interval: ReturnType<typeof setInterval> | null = null;
-
     const fetchJob = () => {
       api.getJob(jobId)
         .then((data) => {
           setJob(data);
           setLoading(false);
-          // Stop polling once the job reaches a terminal state.
-          if (TERMINAL.includes(data.status) && interval) {
+          if (TERMINAL_STATUSES.includes(data.status) && interval) {
             clearInterval(interval);
             interval = null;
           }
@@ -40,7 +73,6 @@ export default function JobDetailPage() {
           setLoading(false);
         });
     };
-
     fetchJob();
     interval = setInterval(fetchJob, 3000);
     return () => {
@@ -53,7 +85,11 @@ export default function JobDetailPage() {
       <>
         <Nav />
         <div className="container">
-          <p>Đang tải...</p>
+          <div className="card">
+            <Skeleton className="skeleton-line" style={{ width: '50%' }} />
+            <Skeleton className="skeleton-line" style={{ width: '80%' }} />
+            <Skeleton className="skeleton-line" style={{ width: '65%' }} />
+          </div>
         </div>
       </>
     );
@@ -65,21 +101,12 @@ export default function JobDetailPage() {
         <Nav />
         <div className="container">
           <div className="card">
-            <p className="error">{error || 'Không tìm thấy job'}</p>
+            <div className="alert alert-error">{error || 'Không tìm thấy job'}</div>
           </div>
         </div>
       </>
     );
   }
-
-  const getStatusClass = (status: string) => {
-    if (status === 'DONE') return 'status-done';
-    if (status === 'FAILED') return 'status-failed';
-    if (['EXTRACTING_AUDIO', 'TRANSCRIBING', 'TRANSLATING', 'RENDERING'].includes(status)) {
-      return 'status-processing';
-    }
-    return 'status-waiting';
-  };
 
   const progressPercent = Math.round(job.progress_percent || PROGRESS_MAP[job.status] || 0);
   const downloadUrl = job.node_download_url;
@@ -88,90 +115,80 @@ export default function JobDetailPage() {
     <>
       <Nav />
       <div className="container">
-        <h1 style={{ marginBottom: '24px' }}>Chi tiết Job</h1>
-
-        <div className="card">
-          <div style={{ marginBottom: '24px' }}>
-            <h2 style={{ marginBottom: '8px' }}>{job.original_filename}</h2>
-            <div style={{ fontSize: '14px', color: '#666' }}>
-              Job ID: {job.id}
-            </div>
+        <div className="page-header">
+          <div>
+            <h1 style={{ overflowWrap: 'anywhere' }}>{job.original_filename || 'Job'}</h1>
+            <div className="subtitle text-mono">{job.id}</div>
           </div>
+          <StatusBadge status={job.status} label={STATUS_LABELS[job.status] || job.status} />
+        </div>
 
-          <div style={{ marginBottom: '24px' }}>
-            <div style={{ marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span className={`status-badge ${getStatusClass(job.status)}`}>
-                {STATUS_LABELS[job.status] || job.status}
+        <div className="grid grid-2">
+          <div className="card">
+            <div className="card-title">Tiến trình</div>
+            <div className="flex-between mb-8">
+              <span className="text-sm text-soft">
+                {job.current_step ? STATUS_LABELS[job.current_step] || job.current_step : '—'}
               </span>
-              <span style={{ fontSize: '14px', fontWeight: '600' }}>{progressPercent}%</span>
+              <span style={{ fontWeight: 700 }}>{progressPercent}%</span>
             </div>
-            <div className="progress-bar">
+            <div className="progress-bar mb-16">
               <div className="progress-fill" style={{ width: `${progressPercent}%` }} />
             </div>
-            {job.current_step && (
-              <div style={{ marginTop: '8px', fontSize: '14px', color: '#666' }}>
-                Bước hiện tại: {STATUS_LABELS[job.current_step] || job.current_step}
+
+            {job.error_message && (
+              <div className="alert alert-error mb-16">
+                <span>⚠️</span>
+                <span>
+                  {job.error_code && <b>[{job.error_code}] </b>}
+                  {job.error_message}
+                </span>
               </div>
             )}
-          </div>
 
-          {job.error_message && (
-            <div style={{ marginBottom: '24px', padding: '16px', background: '#f8d7da', borderRadius: '4px' }}>
-              <div style={{ fontWeight: '600', color: '#721c24', marginBottom: '4px' }}>Lỗi:</div>
-              <div style={{ color: '#721c24', fontSize: '14px' }}>{job.error_message}</div>
-            </div>
-          )}
+            {job.status === 'DONE' && downloadUrl && (
+              <>
+                <a href={downloadUrl} download className="btn btn-primary btn-block">
+                  ⬇ Tải xuống video
+                </a>
+                <div className="text-faint text-sm mt-8">
+                  Lưu ý: sau khi tải xuống, file output trên worker sẽ được dọn để tiết kiệm ổ đĩa.
+                </div>
+              </>
+            )}
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '24px' }}>
-            <div>
-              <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Kích thước</div>
-              <div style={{ fontSize: '14px', fontWeight: '500' }}>
-                {job.file_size_bytes ? (job.file_size_bytes / (1024 * 1024)).toFixed(2) + ' MB' : '-'}
-              </div>
-            </div>
-            <div>
-              <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Thời gian tạo</div>
-              <div style={{ fontSize: '14px', fontWeight: '500' }}>
-                {new Date(job.created_at).toLocaleString('vi-VN')}
-              </div>
-            </div>
-            {job.processing_started_at && (
+            <div className="grid grid-2 mt-24">
               <div>
-                <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Bắt đầu xử lý</div>
-                <div style={{ fontSize: '14px', fontWeight: '500' }}>
-                  {new Date(job.processing_started_at).toLocaleString('vi-VN')}
+                <div className="text-faint text-sm">Kích thước</div>
+                <div style={{ fontWeight: 600 }}>{formatBytes(job.file_size_bytes)}</div>
+              </div>
+              <div>
+                <div className="text-faint text-sm">Độ phân giải</div>
+                <div style={{ fontWeight: 600 }}>{job.resolution || '—'}</div>
+              </div>
+              <div>
+                <div className="text-faint text-sm">Thời lượng</div>
+                <div style={{ fontWeight: 600 }}>
+                  {job.duration_seconds ? `${Math.round(job.duration_seconds)}s` : '—'}
                 </div>
               </div>
-            )}
-            {job.completed_at && (
               <div>
-                <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Hoàn thành</div>
-                <div style={{ fontSize: '14px', fontWeight: '500' }}>
-                  {new Date(job.completed_at).toLocaleString('vi-VN')}
-                </div>
+                <div className="text-faint text-sm">Tạo lúc</div>
+                <div style={{ fontWeight: 600 }}>{new Date(job.created_at).toLocaleString('vi-VN')}</div>
               </div>
-            )}
+            </div>
           </div>
 
-          {job.status === 'DONE' && downloadUrl && (
-            <a
-              href={downloadUrl}
-              download
-              className="btn btn-primary"
-              style={{ display: 'inline-block', textDecoration: 'none' }}
-            >
-              ⬇ Tải xuống video
-            </a>
-          )}
-
-          <div style={{ marginTop: '24px' }}>
-            <button
-              onClick={() => router.push('/dashboard')}
-              className="btn btn-secondary"
-            >
-              ← Quay lại Dashboard
-            </button>
+          <div className="card">
+            <div className="card-title">Các bước xử lý</div>
+            <Timeline job={job} />
           </div>
+        </div>
+
+        <div className="mt-24">
+          <button onClick={() => router.push('/jobs')} className="btn btn-secondary">
+            ← Lịch sử jobs
+          </button>
         </div>
       </div>
     </>

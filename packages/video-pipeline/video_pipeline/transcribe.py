@@ -59,6 +59,42 @@ def transcribe_chunk(chunk_path: Path, chunk_info: dict) -> dict:
     if not cfg.GROQ_API_KEY:
         raise TranscribeError("GROQ_API_KEY not configured")
 
+    chunk_index = chunk_info.get("chunk_index")
+
+    # Pre-flight diagnostics (worker logs only; never log the API key).
+    chunk_path = Path(chunk_path)
+    exists = chunk_path.exists()
+    size = chunk_path.stat().st_size if exists else 0
+    logger.info(
+        "transcribe_chunk start: index=%s path=%s exists=%s size_bytes=%s model=%s",
+        chunk_index,
+        chunk_path,
+        exists,
+        size,
+        cfg.GROQ_MODEL,
+    )
+
+    if not exists:
+        logger.error(
+            "transcribe_chunk: chunk file missing index=%s path=%s", chunk_index, chunk_path
+        )
+        raise TranscribeError(
+            "Audio chunk file not found for transcription.",
+            {
+                "chunk_index": chunk_index,
+                "chunk_path": str(chunk_path),
+                "exists": False,
+            },
+        )
+    if size == 0:
+        logger.error(
+            "transcribe_chunk: chunk file is empty index=%s path=%s", chunk_index, chunk_path
+        )
+        raise TranscribeError(
+            "Audio chunk file is empty.",
+            {"chunk_index": chunk_index, "chunk_path": str(chunk_path), "size_bytes": 0},
+        )
+
     client = OpenAI(api_key=cfg.GROQ_API_KEY, base_url="https://api.groq.com/openai/v1")
 
     try:
@@ -70,7 +106,40 @@ def transcribe_chunk(chunk_path: Path, chunk_info: dict) -> dict:
                 response_format="verbose_json",
             )
     except Exception as e:
-        raise TranscribeError(f"Whisper API failed for chunk {chunk_info['chunk_index']}", {"error": str(e)})
+        # Extract status / response detail when the OpenAI/Groq SDK exposes it,
+        # without ever logging the API key.
+        status_code = getattr(e, "status_code", None)
+        response_text = None
+        resp = getattr(e, "response", None)
+        if resp is not None:
+            try:
+                response_text = resp.text[:500]
+            except Exception:  # noqa: BLE001
+                response_text = None
+        logger.error(
+            "transcribe_chunk: Groq Whisper API failed index=%s path=%s exists=%s "
+            "size_bytes=%s model=%s status=%s error=%s response=%s",
+            chunk_index,
+            chunk_path,
+            exists,
+            size,
+            cfg.GROQ_MODEL,
+            status_code,
+            str(e),
+            response_text,
+        )
+        # User-facing message stays clean; details carry debug info (no secrets).
+        raise TranscribeError(
+            "Transcription failed while contacting the speech-to-text service.",
+            {
+                "chunk_index": chunk_index,
+                "chunk_path": str(chunk_path),
+                "exists": exists,
+                "size_bytes": size,
+                "model": cfg.GROQ_MODEL,
+                "status_code": status_code,
+            },
+        )
 
     data = transcript.model_dump()
     offset = chunk_info["start_offset_seconds"]
@@ -103,6 +172,14 @@ def transcribe_all_chunks(chunks: List[dict], work_dir: Path) -> dict:
     for chunk in chunks:
         chunk_path = work_dir / chunk["path"]
         chunk_json = transcript_dir / f"chunk_{chunk['chunk_index']:03d}.json"
+
+        logger.info(
+            "transcribe_all_chunks: resolving chunk index=%s rel_path=%s -> %s (exists=%s)",
+            chunk.get("chunk_index"),
+            chunk.get("path"),
+            chunk_path,
+            chunk_path.exists(),
+        )
 
         result = transcribe_chunk(chunk_path, chunk)
 

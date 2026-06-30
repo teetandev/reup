@@ -7,24 +7,44 @@ from .config import get_config
 from .errors import ChunkAudioError
 
 
-def chunk_audio(audio_path: Path, output_dir: Path, duration: float) -> List[dict]:
+def chunk_audio(
+    audio_path: Path,
+    output_dir: Path,
+    duration: float,
+    work_dir: Path | None = None,
+) -> List[dict]:
     """
     Split audio into chunks.
 
     Args:
         audio_path: input MP3
-        output_dir: directory for chunks
+        output_dir: directory for chunks (typically ``work_dir/audio/chunks``)
         duration: total audio duration in seconds
+        work_dir: the job working directory. Chunk ``path`` values are returned
+            relative to this directory so that ``transcribe_all_chunks`` can
+            reconstruct the absolute path with ``work_dir / chunk["path"]``.
+            If omitted, it is inferred as ``output_dir.parent.parent`` (i.e.
+            ``work_dir/audio/chunks`` -> ``work_dir``).
 
     Returns:
         List of chunk info dicts with keys:
             chunk_index: int
             start_offset_seconds: float
             duration_seconds: float
-            path: str (relative to output_dir)
+            path: str (relative to ``work_dir``, e.g. ``audio/chunks/chunk_000.mp3``)
     """
     cfg = get_config()
+    output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Resolve the directory that chunk paths should be expressed relative to.
+    # transcribe_all_chunks() does `work_dir / chunk["path"]`, so paths MUST be
+    # relative to the job work_dir (e.g. "audio/chunks/chunk_000.mp3"), never to
+    # the chunks directory itself.
+    if work_dir is not None:
+        rel_base = Path(work_dir).resolve()
+    else:
+        rel_base = output_dir.resolve().parent.parent
 
     chunk_duration = cfg.MAX_CHUNK_DURATION_SEC
     chunks = []
@@ -54,11 +74,19 @@ def chunk_audio(audio_path: Path, output_dir: Path, duration: float) -> List[dic
         if not chunk_file.exists():
             raise ChunkAudioError(f"Chunk file not created: {chunk_file}")
 
+        # Express path relative to the job work_dir so transcribe can rebuild it.
+        try:
+            rel_path = chunk_file.resolve().relative_to(rel_base)
+        except ValueError:
+            # Fallback: if the chunk somehow isn't under rel_base, store a path
+            # relative to work_dir best-effort using the known layout.
+            rel_path = Path("audio") / "chunks" / chunk_file.name
+
         chunks.append({
             "chunk_index": index,
             "start_offset_seconds": start,
             "duration_seconds": chunk_dur,
-            "path": str(chunk_file.relative_to(output_dir.parent.parent))
+            "path": str(rel_path)
         })
 
         start += chunk_dur

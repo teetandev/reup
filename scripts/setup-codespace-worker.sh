@@ -1,162 +1,185 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# =============================================================================
+# Reup Vietsub — One-command Codespace worker setup
+#
+#   bash scripts/setup-codespace-worker.sh
+#
+# Idempotent: re-running updates .env and restarts the worker cleanly.
+# Never prints NODE_TOKEN / GROQ_API_KEY / GEMINI_API_KEY.
+# =============================================================================
 set -euo pipefail
 
-# scripts/setup-codespace-worker.sh
-# One-command setup for Reup Codespace Worker.
+TMUX_SESSION="reup-worker"
+PORT_DEFAULT=8100
 
-echo "======================================================================"
-echo " NEW CODESPACE WORKER SETUP"
-echo "======================================================================"
+say()  { printf '\033[1;36m▸ %s\033[0m\n' "$*"; }
+ok()   { printf '\033[1;32m✓ %s\033[0m\n' "$*"; }
+warn() { printf '\033[1;33m! %s\033[0m\n' "$*"; }
+err()  { printf '\033[1;31m✗ %s\033[0m\n' "$*"; }
+mask() { local v="$1"; [ -n "$v" ] && printf '%s…(%d chars)' "${v:0:4}" "${#v}" || printf '<empty>'; }
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-AGENT_DIR="$REPO_ROOT/services/vps-agent"
-VENV="$AGENT_DIR/.venv"
-ENV_FILE="$AGENT_DIR/.env"
-WORK_DIR="$REPO_ROOT/.worker/jobs"
-
-# 1. Install/check dependencies
-echo -e "\n==> Checking dependencies..."
-MISSING_PKGS=""
-if ! command -v python3 &> /dev/null; then MISSING_PKGS="python3 $MISSING_PKGS"; fi
-if ! command -v ffmpeg &> /dev/null; then MISSING_PKGS="ffmpeg $MISSING_PKGS"; fi
-if ! command -v ffprobe &> /dev/null; then MISSING_PKGS="ffprobe $MISSING_PKGS"; fi
-if ! command -v tmux &> /dev/null; then MISSING_PKGS="tmux $MISSING_PKGS"; fi
-if ! command -v curl &> /dev/null; then MISSING_PKGS="curl $MISSING_PKGS"; fi
-
-if [ -n "$MISSING_PKGS" ]; then
-    echo "    Missing dependencies: $MISSING_PKGS"
-    echo "    Installing..."
-    sudo apt update && sudo apt install -y ffmpeg python3-venv tmux curl
-else
-    echo "    All system dependencies are installed."
+# ---------------------------------------------------------------- repo root --
+if ! REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+  err "Not inside a git repo. Run this from within the cloned repo."
+  exit 1
 fi
-
-# 2. Setup Python environment
-echo -e "\n==> Setting up Python venv..."
-mkdir -p "$WORK_DIR"
-cd "$AGENT_DIR"
-if [ ! -d "$VENV" ]; then
-    python3 -m venv .venv
-fi
-# Using a small sub-script to avoid set -u issues with activate script
-bash -c "
-source .venv/bin/activate
-pip install --quiet --upgrade pip
-pip install --quiet -r requirements.txt
-"
 cd "$REPO_ROOT"
+say "Repo root: $REPO_ROOT"
 
-# 3. Detect AGENT_PUBLIC_URL
-echo -e "\n==> Detecting Codespace environment..."
+AGENT_DIR="$REPO_ROOT/services/vps-agent"
+PIPELINE_DIR="$REPO_ROOT/packages/video-pipeline"
+ENV_FILE="$AGENT_DIR/.env"
+VENV="$AGENT_DIR/.venv"
+
+# ------------------------------------------------------------- dependencies --
+say "Checking dependencies…"
+need_install=()
+for bin in python3 curl git; do
+  command -v "$bin" >/dev/null 2>&1 || { err "Missing required: $bin"; exit 1; }
+done
+command -v ffmpeg >/dev/null 2>&1 || need_install+=(ffmpeg)
+command -v tmux   >/dev/null 2>&1 || need_install+=(tmux)
+
+if [ "${#need_install[@]}" -gt 0 ]; then
+  warn "Missing: ${need_install[*]}"
+  if command -v apt-get >/dev/null 2>&1; then
+    say "Installing via apt-get…"
+    sudo apt-get update -y && sudo apt-get install -y "${need_install[@]}" \
+      || warn "apt-get install failed — install ${need_install[*]} manually."
+  else
+    warn "Please install manually: ${need_install[*]}"
+  fi
+fi
+command -v ffmpeg >/dev/null 2>&1 && ok "ffmpeg present" || warn "ffmpeg still missing"
+command -v tmux   >/dev/null 2>&1 && ok "tmux present"   || { err "tmux required to run the worker"; exit 1; }
+
+# --------------------------------------------------------------------- venv --
+say "Setting up venv…"
+[ -d "$VENV" ] || python3 -m venv "$VENV"
+# shellcheck disable=SC1091
+source "$VENV/bin/activate"
+pip install --quiet --upgrade pip
+pip install --quiet -r "$AGENT_DIR/requirements.txt"
+[ -f "$PIPELINE_DIR/requirements.txt" ] && pip install --quiet -r "$PIPELINE_DIR/requirements.txt"
+# Safety net for required runtime packages.
+pip install --quiet fastapi "uvicorn[standard]" httpx python-multipart >/dev/null 2>&1 || true
+ok "venv ready"
+
+# --------------------------------------------------------------- gather input -
+echo
+say "Enter node configuration (token/keys are hidden and never printed):"
+read -r -p "NODE_ID: " NODE_ID
+read -r -s -p "NODE_TOKEN: " NODE_TOKEN; echo
+read -r -p "CONTROL_API_URL [https://reup-control-api.onrender.com]: " CONTROL_API_URL
+CONTROL_API_URL="${CONTROL_API_URL:-https://reup-control-api.onrender.com}"
+
+# Auto-detect Codespace public URL for port 8100 if available.
+DEFAULT_PUBLIC=""
 if [ -n "${CODESPACE_NAME:-}" ] && [ -n "${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN:-}" ]; then
-    AGENT_PUBLIC_URL="https://${CODESPACE_NAME}-8100.${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN}"
-    echo "    Detected AGENT_PUBLIC_URL: $AGENT_PUBLIC_URL"
-else
-    echo "    Could not auto-detect Codespace URL."
-    read -p "    Please enter AGENT_PUBLIC_URL (e.g. https://<name>-8100.app.github.dev): " AGENT_PUBLIC_URL
+  DEFAULT_PUBLIC="https://${CODESPACE_NAME}-${PORT_DEFAULT}.${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN}"
 fi
+read -r -p "AGENT_PUBLIC_URL [${DEFAULT_PUBLIC:-https://...-8100.app.github.dev}]: " AGENT_PUBLIC_URL
+AGENT_PUBLIC_URL="${AGENT_PUBLIC_URL:-$DEFAULT_PUBLIC}"
 
-NODE_ID="codespace-worker-01"
-
-# 4. Prompt user for registration
-echo -e "\n======================================================================"
-echo " ACTION REQUIRED: REGISTER NODE IN ADMIN DASHBOARD"
-echo "======================================================================"
-echo " 1. Go to your Reup Web Admin -> VPS Nodes"
-echo " 2. Click 'Register New Node'"
-echo " 3. Enter exactly:"
-echo "      Name:       $NODE_ID"
-echo "      Public URL: $AGENT_PUBLIC_URL"
-echo " 4. Save and copy the generated NODE_TOKEN."
-echo ""
-read -p " Do you already have the NODE_TOKEN from Admin? [y/N] " HAS_TOKEN
-
-if [[ ! "$HAS_TOKEN" =~ ^[Yy]$ ]]; then
-    echo -e "\n==> Setup paused."
-    echo "    Please register the node first using the URL above."
-    echo "    Then rerun this command: bash scripts/setup-codespace-worker.sh"
-    echo "    Don't forget to set Port 8100 to PUBLIC in the Ports tab!"
-    exit 0
+read -r -p "MOCK_AI [false]: " MOCK_AI; MOCK_AI="${MOCK_AI:-false}"
+GROQ_API_KEY=""; GEMINI_API_KEY=""
+if [ "$MOCK_AI" != "true" ]; then
+  read -r -s -p "GROQ_API_KEY: " GROQ_API_KEY; echo
+  read -r -s -p "GEMINI_API_KEY: " GEMINI_API_KEY; echo
 fi
+read -r -p "GROQ_MODEL [whisper-large-v3]: " GROQ_MODEL; GROQ_MODEL="${GROQ_MODEL:-whisper-large-v3}"
+read -r -p "GEMINI_MODEL [gemini-2.5-flash]: " GEMINI_MODEL; GEMINI_MODEL="${GEMINI_MODEL:-gemini-2.5-flash}"
+read -r -p "OUTPUT_TTL_HOURS [6]: " OUTPUT_TTL_HOURS; OUTPUT_TTL_HOURS="${OUTPUT_TTL_HOURS:-6}"
+read -r -p "PORT [$PORT_DEFAULT]: " PORT; PORT="${PORT:-$PORT_DEFAULT}"
+WORK_DIR="$AGENT_DIR/agent_work"
 
-# 5. Ask for NODE_TOKEN
-echo ""
-read -s -p " Paste NODE_TOKEN: " NODE_TOKEN
-echo ""
-
-if [ -z "$NODE_TOKEN" ]; then
-    echo "[ERROR] NODE_TOKEN cannot be empty."
-    exit 1
-fi
-
-# 6. Write services/vps-agent/.env
-echo -e "\n==> Writing .env configuration..."
+# ------------------------------------------------------------- write .env ----
+say "Writing $ENV_FILE (secrets not echoed)…"
+umask 077
 cat > "$ENV_FILE" <<EOF
-APP_ENV=development
 NODE_ID=$NODE_ID
 NODE_TOKEN=$NODE_TOKEN
-CONTROL_API_URL=https://reup-control-api.onrender.com
+CONTROL_API_URL=$CONTROL_API_URL
 AGENT_PUBLIC_URL=$AGENT_PUBLIC_URL
-AGENT_PORT=8100
-HEARTBEAT_INTERVAL_SECONDS=30
-MAX_JOBS=1
-MAX_FILE_MB=500
+MOCK_AI=$MOCK_AI
+GROQ_API_KEY=$GROQ_API_KEY
+GROQ_MODEL=$GROQ_MODEL
+GEMINI_API_KEY=$GEMINI_API_KEY
+GEMINI_MODEL=$GEMINI_MODEL
+OUTPUT_TTL_HOURS=$OUTPUT_TTL_HOURS
 WORK_DIR=$WORK_DIR
-FFMPEG_BIN=ffmpeg
-FFPROBE_BIN=ffprobe
-FFMPEG_THREADS=3
-FFMPEG_PRESET=ultrafast
-FFMPEG_CRF=28
-MOCK_AI=true
+PORT=$PORT
+HEARTBEAT_INTERVAL_SECONDS=30
 EOF
+ok ".env written  (NODE_ID=$NODE_ID, NODE_TOKEN=$(mask "$NODE_TOKEN"), GROQ=$(mask "$GROQ_API_KEY"), GEMINI=$(mask "$GEMINI_API_KEY"))"
 
-# 7. Start worker in tmux
-echo "==> Starting VPS Agent in background (tmux)..."
-SESSION="reup-worker"
-if tmux has-session -t "$SESSION" 2>/dev/null; then
-    echo "    Killing existing tmux session: $SESSION"
-    tmux kill-session -t "$SESSION"
+# ------------------------------------------------------------- start worker --
+say "Starting worker (tmux session: $TMUX_SESSION)…"
+tmux kill-session -t "$TMUX_SESSION" 2>/dev/null || true
+fuser -k "${PORT}/tcp" 2>/dev/null || true
+
+PYTHONPATH_VAL="$PIPELINE_DIR:$AGENT_DIR"
+START_CMD="cd '$AGENT_DIR' && source .venv/bin/activate && set -a && source .env && set +a && export PYTHONPATH='$PYTHONPATH_VAL:\$PYTHONPATH' && python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+tmux new-session -d -s "$TMUX_SESSION" "$START_CMD"
+ok "tmux session started"
+
+# ------------------------------------------------------------ local health --
+say "Waiting for local health…"
+LOCAL_OK="FAIL"
+for _ in $(seq 1 15); do
+  if curl -fsS "http://localhost:$PORT/health" >/dev/null 2>&1; then LOCAL_OK="OK"; break; fi
+  sleep 1
+done
+if [ "$LOCAL_OK" = "OK" ]; then ok "Local health OK (http://localhost:$PORT/health)"; else
+  err "Local health FAILED — last logs:"; tmux capture-pane -t "$TMUX_SESSION" -p 2>/dev/null | tail -30
 fi
 
-cd "$AGENT_DIR"
-tmux new-session -d -s "$SESSION" -c "$AGENT_DIR" \
-    "source $VENV/bin/activate && set -a && source $ENV_FILE && set +a && exec uvicorn app.main:app --host 0.0.0.0 --port 8100"
-cd "$REPO_ROOT"
-
-echo "    Waiting for uvicorn to boot (3s)..."
-sleep 3
-
-# 8. Test /health
-echo "==> Testing local health endpoint..."
-if curl -sf http://localhost:8100/health > /dev/null; then
-    echo "    [OK] Local /health is responding."
+# --------------------------------------------------------- public port auto --
+say "Configuring public port $PORT…"
+if [ -n "${CODESPACE_NAME:-}" ] && command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+  if gh codespace ports visibility "${PORT}:public" -c "$CODESPACE_NAME" >/dev/null 2>&1; then
+    ok "Set port $PORT visibility=public via gh"
+  else
+    warn "gh could not set visibility automatically."
+  fi
+  warn "If public /health returns HTTP/2 502: open PORTS tab → port $PORT → Protocol = HTTP (not HTTPS)."
 else
-    echo "    [WARN] Local /health did not respond immediately."
+  warn "gh CLI not authenticated / not a Codespace — set the port manually:"
+  echo "    Open PORTS tab → port $PORT → Visibility = Public, Protocol = HTTP"
 fi
 
-echo "==> Testing public health endpoint..."
-if curl -sf "$AGENT_PUBLIC_URL/health" > /dev/null; then
-    echo "    [OK] Public /health is responding."
+# ------------------------------------------------------------ public health --
+PUBLIC_OK="SKIP"
+if [ -n "$AGENT_PUBLIC_URL" ]; then
+  say "Checking public health: $AGENT_PUBLIC_URL/health"
+  if curl -fsS "$AGENT_PUBLIC_URL/health" >/dev/null 2>&1; then
+    PUBLIC_OK="OK"; ok "Public health OK"
+  else
+    PUBLIC_OK="FAIL"; warn "Public health FAILED — ensure port $PORT is Public + Protocol HTTP (HTTPS causes 502)."
+  fi
+fi
+
+# --------------------------------------------------------------- heartbeat ---
+say "Waiting ~35s for heartbeat…"
+sleep 35
+HB_OK="FAIL"
+if tmux capture-pane -t "$TMUX_SESSION" -p 2>/dev/null | grep -qiE "Heartbeat ok|heartbeat.*200"; then
+  HB_OK="OK"; ok "Heartbeat OK"
+elif tmux capture-pane -t "$TMUX_SESSION" -p 2>/dev/null | grep -qiE "Heartbeat loop started"; then
+  HB_OK="STARTED"; warn "Heartbeat loop started (no explicit 200 yet) — check Admin for IDLE."
 else
-    echo "    [WARN] Public /health failed."
-    echo "           Make sure you set Port 8100 to PUBLIC in the Ports tab!"
+  warn "Heartbeat not confirmed in logs."
 fi
 
-# 9. Print final status
-echo -e "\n======================================================================"
-echo " WORKER READY!"
-echo "======================================================================"
-echo " NODE_ID         : $NODE_ID"
-echo " AGENT_PUBLIC_URL: $AGENT_PUBLIC_URL"
-echo ""
-echo " Check Admin -> VPS Nodes. The node should become IDLE (online)"
-echo " after the first heartbeat (within 30 seconds)."
-echo ""
-echo " Next Steps:"
-echo "  1. Verify Port 8100 is Public in the 'Ports' panel."
-echo "  2. Go to the Web UI and upload a video."
-echo ""
-echo " To view worker logs:"
-echo "  tmux attach -t reup-worker"
-echo "  (Press Ctrl+B, then D to detach)"
-echo "======================================================================"
+# ------------------------------------------------------------------ summary --
+echo
+echo "──────────────── Setup summary ────────────────"
+printf "  Local health   : %s\n" "$LOCAL_OK"
+printf "  Public health  : %s\n" "$PUBLIC_OK"
+printf "  Heartbeat      : %s\n" "$HB_OK"
+printf "  Node ID        : %s\n" "$NODE_ID"
+echo "  Attach logs    : tmux attach -t $TMUX_SESSION"
+echo "  Tail logs      : tmux capture-pane -t $TMUX_SESSION -p | tail -100"
+echo "  Stop worker    : tmux kill-session -t $TMUX_SESSION"
+echo "────────────────────────────────────────────────"
+[ "$LOCAL_OK" = "OK" ] && ok "Worker is running. Check Admin → VPS Nodes for IDLE status."
