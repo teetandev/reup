@@ -58,7 +58,7 @@ def chunk_audio(audio_path: Path, output_dir: Path, duration: float) -> List[dic
             "chunk_index": index,
             "start_offset_seconds": start,
             "duration_seconds": chunk_dur,
-            "path": str(chunk_file.relative_to(output_dir.parent))
+            "path": str(chunk_file.relative_to(output_dir.parent.parent))
         })
 
         start += chunk_dur
