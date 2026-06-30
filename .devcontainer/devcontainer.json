@@ -1,0 +1,33 @@
+{
+  "name": "Reup Vietsub — Codespace Worker",
+  "image": "mcr.microsoft.com/devcontainers/python:3.11",
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "installZsh": true,
+      "installOhMyZsh": true
+    }
+  },
+  "postCreateCommand": "bash .devcontainer/postCreateCommand.sh",
+  "forwardPorts": [8100],
+  "portsAttributes": {
+    "8100": {
+      "label": "VPS Agent",
+      "onAutoForward": "notify",
+      "protocol": "https"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/workspaces/reup/services/vps-agent/.venv/bin/python"
+      }
+    }
+  },
+  "remoteEnv": {
+    "WORK_DIR": "/workspaces/reup/.worker/jobs"
+  }
+}

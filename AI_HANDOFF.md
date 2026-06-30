@@ -3,13 +3,61 @@
 **Single source of truth for continuing work** if the AI session loses context or runs out of tokens.
 Read this first, then the spec files it points to. Keep this file updated after every phase.
 
-- **Last updated:** 2026-06-29
-- **Current phase done:** Phase 15 — Local End-to-End Test & Bugfix (COMPLETE)
-- **Next phase:** First VPS deployment test (real node)
+- **Last updated:** 2026-06-30
+- **Current phase done:** Phase 16 — Codespace Worker Mode (COMPLETE)
+- **Next phase:** Real Codespace Upload + Heartbeat Test
 
 ---
 
-## 0. Phase 15 — Local E2E (added 2026-06-29)
+## 0a. Phase 16 — Codespace Worker Mode (added 2026-06-30)
+
+**Goal:** Replace VPS Agent deployment with GitHub Codespace as the primary free/test worker.  
+VPS deployment remains as legacy/production option. No VPS Agent code deleted.
+
+**Tested facts from real Codespace session:**
+- `uvicorn app.main:app --host 0.0.0.0 --port 8100` starts cleanly
+- `/health` and `/status` endpoints work
+- `tmux` background mode works
+- Manual FFmpeg render succeeded
+- `MOCK_AI=true` pipeline ran end-to-end
+- `INPUT_NOT_FOUND` returned correctly when video not uploaded
+- `MAX_JOBS=1` respected
+
+**Changed files:**
+- `[NEW] .devcontainer/devcontainer.json` — auto-provisions Python 3.11, FFmpeg, venv, port 8100
+- `[NEW] .devcontainer/postCreateCommand.sh` — installs deps, creates work dir, copies .env
+- `[NEW] scripts/start-codespace-worker.sh` — starts uvicorn (foreground or tmux --bg)
+- `[NEW] scripts/check-codespace-worker.sh` — health check local + public URL
+- `[NEW] services/vps-agent/.env.codespace` — Codespace-specific .env template
+- `[NEW] docs/runbooks/CODESPACE_WORKER.md` — full step-by-step runbook
+- `[MODIFIED] services/vps-agent/.env.example` — Codespace hints added
+
+**Codespace Worker Quick Start:**
+```bash
+# 1. Open Codespace on https://github.com/teetandev/reup
+# 2. Wait for postCreateCommand to finish (~2-3 min)
+# 3. Edit services/vps-agent/.env (set NODE_TOKEN, CONTROL_API_URL, AGENT_PUBLIC_URL)
+# 4. Start worker:
+bash scripts/start-codespace-worker.sh --bg
+# 5. Set port 8100 to PUBLIC in Ports panel
+# 6. Health check:
+bash scripts/check-codespace-worker.sh
+```
+
+**What still needs real Codespace testing:**
+- Upload endpoint (`POST /jobs/{id}/upload`) with real video
+- Heartbeat to real Control API
+- Frontend browser CORS direct upload to Codespace URL
+- Port visibility persistence after Codespace restart
+- Job status callbacks back to Control API
+- `MOCK_AI=false` with real Groq + Gemini keys
+
+**Next prompt (Phase 17):**
+> Test the full Codespace Worker upload + heartbeat flow. Open a real Codespace on teetandev/reup. Start the worker with `bash scripts/start-codespace-worker.sh --bg`. Set port 8100 to Public. Register the node in the Admin Dashboard with the Codespace public URL. Upload a small Chinese video from the Web UI. Verify the heartbeat appears in Admin → Nodes. Verify direct browser upload reaches the Codespace worker. Verify job progresses through all statuses to DONE (MOCK_AI=true). Download the output. Fix only blocking bugs. Update CODESPACE_WORKER.md with real test results and mark untested items as tested or blocked.
+
+---
+
+## 0b. Phase 15 — Local E2E (added 2026-06-29)
 
 **E2E status:** System is wired correctly end-to-end and is ready to run locally.
 Verified by full code review of the entire request path (login → create job →
