@@ -1,0 +1,26 @@
+NEW CODESPACE WORKER QUICK START
+
+1. Open new GitHub Codespace from: https://github.com/teetandev/reup
+2. Run: bash scripts/setup-codespace-worker.sh
+3. If the script says NODE_TOKEN is missing:
+   - Copy the printed AGENT_PUBLIC_URL.
+   - Go to Web Admin -> VPS Nodes.
+   - Register node:
+       Name: codespace-worker-01
+       Public URL: printed AGENT_PUBLIC_URL
+   - Copy NODE_TOKEN.
+   - Run again: bash scripts/setup-codespace-worker.sh
+4. Set port 8100 to Public if Codespace did not do it automatically.
+5. Check: https://<codespace-name>-8100.app.github.dev/health
+6. Go back to Web UI and upload a small video.
+
+--------------------------------------------------------------------------------
+Troubleshooting
+--------------------------------------------------------------------------------
+- NO_NODE_AVAILABLE means no worker heartbeat yet. Check Admin -> Nodes to see if it is IDLE.
+- INPUT_NOT_FOUND means start was called before upload. Make sure to upload the video first.
+- 404 on app.github.dev means wrong URL; must include -8100.app.github.dev.
+- Codespace restart may require running the setup command again (tmux and processes are killed).
+- Public port may need to be set again after restart.
+- MOCK_AI=true means no real GroQ/Gemini keys are needed. Stub text will be used.
+- For real AI later set MOCK_AI=false and configure secrets only in worker/backend (.env), never frontend.

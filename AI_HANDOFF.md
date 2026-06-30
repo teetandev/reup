@@ -4,8 +4,25 @@
 Read this first, then the spec files it points to. Keep this file updated after every phase.
 
 - **Last updated:** 2026-06-30
-- **Current phase done:** Phase 16 — Codespace Worker Mode (COMPLETE)
-- **Next phase:** Real Codespace Upload + Heartbeat Test
+- **Current phase done:** Phase 17 — One Command Setup for GitHub Codespace Worker (COMPLETE)
+- **Next phase:** Verify Codespace worker upload and processing
+
+---
+
+## 00. Phase 17 — One Command Setup for GitHub Codespace Worker (added 2026-06-30)
+
+**Goal:** Create a simple `bash scripts/setup-codespace-worker.sh` command to initialize and start the Codespace worker interactively.
+
+**Changed files:**
+- `[NEW] scripts/setup-codespace-worker.sh` — Interactive one-command setup. Auto-installs dependencies, detects public URL, prompts for registration and `NODE_TOKEN`, writes `.env`, starts `tmux` session, and tests health.
+- `[NEW] docs/runbooks/CODESPACE_ONE_COMMAND.txt` — Quick start guide with troubleshooting.
+
+**What user still must do in Web Admin:**
+- Register the node in Web Admin -> VPS Nodes using the detected `AGENT_PUBLIC_URL`.
+- Copy the generated `NODE_TOKEN` and paste it when the script asks.
+
+**Next step after worker is online:**
+- Go back to the Web UI (Vercel) and upload a small video to test the end-to-end pipeline. The worker heartbeat should be visible in the Admin Dashboard, resolving the `NO_NODE_AVAILABLE` error.
 
 ---
 
