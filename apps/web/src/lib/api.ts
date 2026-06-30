@@ -187,7 +187,6 @@ export function uploadToNode(
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', uploadUrl);
-    xhr.setRequestHeader('Authorization', `Bearer ${uploadToken}`);
 
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) {
@@ -207,14 +206,18 @@ export function uploadToNode(
 
     const formData = new FormData();
     formData.append('file', file);
+    formData.append('upload_token', uploadToken);
     xhr.send(formData);
   });
 }
 
 export async function startJob(nodeUrl: string, jobId: string, uploadToken: string): Promise<void> {
+  const formData = new FormData();
+  formData.append('upload_token', uploadToken);
+
   const res = await fetch(`${nodeUrl}/jobs/${jobId}/start`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${uploadToken}` },
+    body: formData,
   });
   if (!res.ok) {
     throw new Error('Failed to start job');

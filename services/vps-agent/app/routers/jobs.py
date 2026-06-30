@@ -19,7 +19,7 @@ import secrets
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Header
+from fastapi import APIRouter, Depends, Form, Header
 from fastapi.responses import FileResponse, JSONResponse
 
 from ..config import Settings, get_settings
@@ -60,13 +60,22 @@ def _bearer(authorization: str | None) -> str:
     return authorization[7:]
 
 
-async def _authorize_mutation(settings: Settings, job_id: str, authorization: str | None) -> None:
+async def _authorize_mutation(
+    settings: Settings,
+    job_id: str,
+    authorization: str | None,
+    upload_token: str | None = None,
+) -> None:
     """Authorize a mutating job action (start/cancel).
 
     Accepts either this node's own token (constant-time compare) or the job's upload
     token (validated against the Control API, same path as upload).
     """
-    token = _bearer(authorization)
+    token = None
+    if upload_token:
+        token = upload_token.strip()
+    else:
+        token = _bearer(authorization)
 
     if settings.node_token and secrets.compare_digest(token, settings.node_token):
         return
@@ -78,6 +87,7 @@ async def _authorize_mutation(settings: Settings, job_id: str, authorization: st
 @router.post("/{job_id}/start")
 async def start_job(
     job_id: str,
+    upload_token: str | None = Form(None),
     authorization: str | None = Header(None),
     node_state: NodeState = Depends(get_node_state),
     settings: Settings = Depends(get_settings),
@@ -88,7 +98,7 @@ async def start_job(
     slot is free or already held by this job (normally held since upload).
     """
     _validate_job_id(job_id)
-    await _authorize_mutation(settings, job_id, authorization)
+    await _authorize_mutation(settings, job_id, authorization, upload_token)
 
     job_dir = Path(settings.work_dir) / "jobs" / job_id
     input_path = job_dir / "input.mp4"

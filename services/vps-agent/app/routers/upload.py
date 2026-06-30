@@ -10,7 +10,7 @@ import os
 import shutil
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Header, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, UploadFile
 from fastapi.responses import JSONResponse
 
 from ..config import Settings, get_settings
@@ -32,6 +32,7 @@ logger = get_logger(__name__)
 async def upload_video(
     job_id: str,
     file: UploadFile = File(...),
+    upload_token: str | None = Form(None),
     authorization: str | None = Header(None),
     node_state: NodeState = Depends(get_node_state),
     settings: Settings = Depends(get_settings),
@@ -53,13 +54,17 @@ async def upload_video(
     - Original filename sanitized
     """
     # Extract token
-    if not authorization or not authorization.startswith("Bearer "):
-        raise AgentError(401, "UNAUTHORIZED", "Missing or invalid Authorization header.")
+    token = None
+    if upload_token:
+        token = upload_token.strip()
+    elif authorization and authorization.startswith("Bearer "):
+        token = authorization[7:]
 
-    upload_token = authorization[7:]
+    if not token:
+        raise AgentError(401, "UNAUTHORIZED", "Missing upload_token or invalid Authorization header.")
 
     # Validate token with Control API
-    token_info = await validate_upload_token(settings, job_id, upload_token)
+    token_info = await validate_upload_token(settings, job_id, token)
 
     # Acquire job slot (enforces MAX_JOBS=1)
     try:
