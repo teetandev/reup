@@ -46,7 +46,9 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    config.set_main_option("sqlalchemy.url", _get_url())
+    # Escape % to %% because Alembic uses configparser which treats % as interpolation syntax
+    safe_url = _get_url().replace("%", "%%")
+    config.set_main_option("sqlalchemy.url", safe_url)
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
