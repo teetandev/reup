@@ -43,6 +43,11 @@ class Settings(BaseSettings):
 
     # Scheduler
     node_heartbeat_stale_seconds: int = 60
+    # A job stuck in a pre-upload state (CREATED/ASSIGNED_NODE/WAITING_UPLOAD/
+    # UPLOADING) with no completed upload past this many minutes is treated as
+    # abandoned: auto-expired and excluded from quota. Prevents failed browser
+    # uploads (404/413) from permanently blocking a user's concurrent limit.
+    stale_job_timeout_minutes: int = 30
 
     # CORS — comma-separated origins in env, exposed as a list via property
     cors_origins: str = Field(default="http://localhost:3000")

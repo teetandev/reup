@@ -28,12 +28,44 @@ FORBIDDEN
 Job:
 ```text
 USER_LIMIT_REACHED
+DAILY_LIMIT_REACHED
 NO_NODE_AVAILABLE
 JOB_NOT_FOUND
 JOB_NOT_OWNED
 INVALID_JOB_STATUS
 JOB_CANCELLED
 ```
+
+`USER_LIMIT_REACHED` (concurrent) and `DAILY_LIMIT_REACHED` (per-day) are both
+`409` and carry quota diagnostics in `details`:
+
+```json
+{
+  "error": {
+    "code": "USER_LIMIT_REACHED",
+    "message": "Bạn đang có 1/1 job đang chạy. ...",
+    "details": {
+      "active_jobs_count": 1,
+      "active_jobs_limit": 1,
+      "daily_jobs_count": 1,
+      "daily_jobs_limit": 10,
+      "stuck_job_ids": ["<uuid>"]
+    }
+  }
+}
+```
+
+Quota rules:
+
+- Only **active** statuses (`ASSIGNED_NODE`, `WAITING_UPLOAD`, `UPLOADING`,
+  `UPLOADED`, `EXTRACTING_AUDIO`…`RENDERING`) count toward the concurrent limit.
+- The daily limit counts active + `DONE` jobs created today; `FAILED`,
+  `CANCELLED`, `EXPIRED` (incl. failed uploads) never consume daily quota.
+- Jobs stuck in a pre-upload state with no completed upload past
+  `STALE_JOB_TIMEOUT_MINUTES` (default 30) are auto-expired (`UPLOAD_TIMEOUT`)
+  on the next `POST /jobs` and stop counting. Admins can force this via
+  `POST /admin/jobs/cleanup-stale`.
+- `ADMIN` role users bypass quota entirely.
 
 Node:
 ```text

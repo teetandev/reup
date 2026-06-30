@@ -73,7 +73,25 @@ export default function NewJobPage() {
         } else if (err.code === 'FILE_TOO_LARGE') {
           setError('File quá lớn (tối đa 500MB).');
         } else if (err.code === 'USER_LIMIT_REACHED') {
-          setError('Bạn đã đạt giới hạn job đồng thời/hôm nay.');
+          const a = err.details?.active_jobs_count as number | undefined;
+          const limit = err.details?.active_jobs_limit as number | undefined;
+          const stuck = (err.details?.stuck_job_ids as string[] | undefined) ?? [];
+          let msg = err.message || 'Bạn đã đạt giới hạn job đồng thời.';
+          if (a != null && limit != null) {
+            msg = `Bạn đang có ${a}/${limit} job đang chạy.`;
+          }
+          if (stuck.length > 0) {
+            msg += ' Có job đang kẹt sau lần upload trước — nhờ admin dọn (Cleanup) hoặc thử lại sau 30 phút.';
+          }
+          setError(msg);
+        } else if (err.code === 'DAILY_LIMIT_REACHED') {
+          const d = err.details?.daily_jobs_count as number | undefined;
+          const limit = err.details?.daily_jobs_limit as number | undefined;
+          setError(
+            d != null && limit != null
+              ? `Bạn đã tạo ${d}/${limit} job trong hôm nay. Thử lại vào ngày mai.`
+              : err.message || 'Bạn đã đạt giới hạn job hôm nay.'
+          );
         } else {
           setError('Có lỗi xảy ra: ' + err.message);
         }

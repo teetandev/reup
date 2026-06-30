@@ -38,3 +38,18 @@ class IssueKeyResponse(BaseModel):
 class RevokeKeyResponse(BaseModel):
     id: str
     status: str
+
+
+class MarkJobFailedRequest(BaseModel):
+    reason: str | None = None
+
+
+class AdminJobActionResponse(BaseModel):
+    id: str
+    status: str
+    message: str
+
+
+class CleanupStaleJobsResponse(BaseModel):
+    expired_job_ids: list[str]
+    count: int

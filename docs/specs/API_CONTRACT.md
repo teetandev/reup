@@ -128,6 +128,31 @@ Response includes install command.
 
 ---
 
+### Admin job management
+
+Admin only. Used by the Root Admin → Jobs page to clear stuck jobs.
+
+```text
+GET  /admin/jobs/{job_id}          # job detail (admin view)
+POST /admin/jobs/{job_id}/cancel   # → CANCELLED, releases node (idempotent)
+POST /admin/jobs/{job_id}/mark-failed   # body: {"reason": "..."} → FAILED
+POST /admin/jobs/cleanup-stale     # expire all stuck pre-upload jobs
+```
+
+`cleanup-stale` response:
+
+```json
+{ "expired_job_ids": ["uuid", "..."], "count": 2 }
+```
+
+Cancel / mark-failed response:
+
+```json
+{ "id": "uuid", "status": "CANCELLED", "message": "Job cancelled." }
+```
+
+---
+
 ### POST /nodes/heartbeat
 
 Node authenticated.

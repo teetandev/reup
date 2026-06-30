@@ -49,7 +49,12 @@ export interface CreateJobResponse {
 }
 
 export class ApiError extends Error {
-  constructor(public code: string, message: string, public status: number) {
+  constructor(
+    public code: string,
+    message: string,
+    public status: number,
+    public details: Record<string, unknown> = {}
+  ) {
     super(message);
   }
 }
@@ -77,7 +82,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     throw new ApiError(
       data.error?.code || 'UNKNOWN_ERROR',
       data.error?.message || 'An error occurred',
-      res.status
+      res.status,
+      data.error?.details || {}
     );
   }
   return data;
@@ -218,6 +224,21 @@ export const api = {
     nodeDebug: (nodeId: string) => request<NodeDebug>(`/admin/nodes/${nodeId}/debug`),
     listAllJobs: () => request<JobListResponse>('/admin/jobs').then((r) => r.jobs),
     getJob: (jobId: string) => request<Job>(`/admin/jobs/${jobId}`),
+    cancelJob: (jobId: string) =>
+      request<{ id: string; status: string; message: string }>(
+        `/admin/jobs/${jobId}/cancel`,
+        { method: 'POST' }
+      ),
+    markJobFailed: (jobId: string, reason?: string) =>
+      request<{ id: string; status: string; message: string }>(
+        `/admin/jobs/${jobId}/mark-failed`,
+        { method: 'POST', body: JSON.stringify({ reason }) }
+      ),
+    cleanupStaleJobs: () =>
+      request<{ expired_job_ids: string[]; count: number }>(
+        '/admin/jobs/cleanup-stale',
+        { method: 'POST' }
+      ),
   },
 };
 

@@ -20,11 +20,15 @@ from ..db.enums import ApiKeyStatus, UserRole
 from ..db.models import AdminAuditLog, ApiKey, Job, User, VpsNode
 from ..db.session import get_db
 from ..errors import ApiError
+from ..jobs import service as job_service
 from ..nodes import service as node_service
 from ..schemas.admin import (
+    AdminJobActionResponse,
+    CleanupStaleJobsResponse,
     CreateUserRequest,
     IssueKeyRequest,
     IssueKeyResponse,
+    MarkJobFailedRequest,
     RevokeKeyResponse,
     UserResponse,
 )
@@ -360,3 +364,50 @@ def list_all_jobs(db: Session = Depends(get_db)):
     from ..schemas.jobs import JobResponse
     jobs = list(db.scalars(select(Job).order_by(Job.created_at.desc())))
     return {"jobs": [JobResponse.model_validate(j) for j in jobs]}
+
+
+@router.post("/jobs/cleanup-stale", response_model=CleanupStaleJobsResponse)
+def cleanup_stale_jobs(
+    request: Request,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(settings_dep),
+) -> CleanupStaleJobsResponse:
+    """Expire all jobs stuck in a pre-upload state past the stale timeout."""
+    expired = job_service.cleanup_stale_jobs(db, settings)
+    _audit(db, request, "JOBS_CLEANUP_STALE", "job", None, {"count": len(expired)})
+    return CleanupStaleJobsResponse(expired_job_ids=expired, count=len(expired))
+
+
+@router.get("/jobs/{job_id}")
+def get_job_admin(job_id: str, db: Session = Depends(get_db)):
+    """Get any job by id (admin view)."""
+    from ..schemas.jobs import JobResponse
+    job = job_service.get_job(db, job_id, user=None)
+    return JobResponse.model_validate(job)
+
+
+@router.post("/jobs/{job_id}/cancel", response_model=AdminJobActionResponse)
+def cancel_job(
+    job_id: str, request: Request, db: Session = Depends(get_db)
+) -> AdminJobActionResponse:
+    """Cancel a job and release its node (admin)."""
+    job = job_service.admin_cancel_job(db, job_id)
+    _audit(db, request, "JOB_CANCEL", "job", job.id)
+    return AdminJobActionResponse(
+        id=str(job.id), status=job.status.value, message="Job cancelled."
+    )
+
+
+@router.post("/jobs/{job_id}/mark-failed", response_model=AdminJobActionResponse)
+def mark_job_failed(
+    job_id: str,
+    body: MarkJobFailedRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> AdminJobActionResponse:
+    """Mark a job as FAILED and release its node (admin)."""
+    job = job_service.admin_mark_failed(db, job_id, body.reason)
+    _audit(db, request, "JOB_MARK_FAILED", "job", job.id)
+    return AdminJobActionResponse(
+        id=str(job.id), status=job.status.value, message="Job marked as failed."
+    )
